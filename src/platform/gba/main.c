@@ -124,7 +124,7 @@ static void EWRAM_CODE draw_menu(void)
     iprintf(CON_CLS());
 
     // ansi escape sequence to move cursor up
-    iprintf(CON_POS(0, 0) "TotalGBS: 1.0.0");
+    iprintf(CON_POS(0, 0) "TotalGBS: " LIBGBS_VERSION_STR);
     iprintf(CON_POS(0, 2) "%s", gbs_meta.title_string);
     iprintf(CON_POS(0, 6) "%s", gbs_meta.author_string);
     iprintf(CON_POS(0, 10) "%s", gbs_meta.copyright_string);
@@ -196,7 +196,7 @@ int main(void)
     if (rom_meta.magic != 0x454D5530)
     {
         iprintf("\ngot magic: %lX wanted: %X\n", rom_meta.magic, 0x454D5530);
-        error_loop("failed to mount fat device :(\n");
+        error_loop("unable to find rom_meta magic :(\n");
     }
 
     gbs = gbs_init(0);
