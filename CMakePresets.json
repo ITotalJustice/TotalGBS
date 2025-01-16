@@ -1,0 +1,429 @@
+{
+    "version": 3,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 21,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "core",
+            "displayName": "core",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "core-dev",
+            "displayName": "core-dev",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "pc",
+            "displayName": "pc",
+            "inherits": [ "core" ],
+            "cacheVariables": {
+                "PC": true,
+                "GBS_ENABLE_GBS2GB": true
+            }
+        },
+        {
+            "name": "pc-dev",
+            "displayName": "pc-dev",
+            "inherits": [ "core-dev" ],
+            "cacheVariables": {
+                "PC": true,
+                "GBS_ENABLE_GBS2GB": true
+            }
+        },
+        {
+            "name": "gba",
+            "displayName": "gba",
+            "inherits": [ "core" ],
+            "toolchainFile": "$env{DEVKITPRO}/cmake/GBA.cmake",
+            "cacheVariables": {
+                "GBA": true,
+                "ENABLE_LTO": false,
+                "GBS_ENABLE_LRU": true
+            }
+        },
+        {
+            "name": "nds",
+            "displayName": "nds",
+            "inherits": [ "core" ],
+            "toolchainFile": "$env{DEVKITPRO}/cmake/NDS.cmake",
+            "cacheVariables": {
+                "NDS": true,
+                "GB_APU_CXX": false,
+                "GBS_ENABLE_LRU": true
+            }
+        },
+        {
+            "name": "3ds",
+            "displayName": "3ds",
+            "inherits": [ "core" ],
+            "toolchainFile": "$env{DEVKITPRO}/cmake/3DS.cmake",
+            "cacheVariables": {
+                "3DS": true
+            }
+        },
+        {
+            "name": "n64",
+            "displayName": "n64",
+            "inherits": [ "core" ],
+            "toolchainFile": "${sourceDir}/cmake/toolchain/libdragon.cmake",
+            "cacheVariables": {
+                "N64": true
+            }
+        },
+        {
+            "name": "gamecube",
+            "displayName": "gamecube",
+            "inherits": [ "core" ],
+            "toolchainFile": "$env{DEVKITPRO}/cmake/GameCube.cmake",
+            "cacheVariables": {
+                "GAMECUBE": true
+            }
+        },
+        {
+            "name": "wii",
+            "displayName": "wii",
+            "inherits": [ "core" ],
+            "toolchainFile": "$env{DEVKITPRO}/cmake/Wii.cmake",
+            "cacheVariables": {
+                "WII": true
+            }
+        },
+        {
+            "name": "wiiu",
+            "displayName": "wiiu",
+            "inherits": [ "core" ],
+            "toolchainFile": "$env{DEVKITPRO}/cmake/WiiU.cmake",
+            "cacheVariables": {
+                "WIIU": true
+            }
+        },
+        {
+            "name": "switch",
+            "displayName": "switch",
+            "inherits": [ "core" ],
+            "toolchainFile": "$env{DEVKITPRO}/cmake/Switch.cmake",
+            "cacheVariables": {
+                "SWITCH": true,
+                "GB_APU_CXX": false,
+                "CMAKE_BUILD_TYPE": "MinSizeRel",
+                "ENABLE_LTO": true,
+                "GBS_ENABLE_LRU": true
+            }
+        },
+        {
+            "name": "dreamcast",
+            "displayName": "dreamcast",
+            "inherits": [ "core" ],
+            "toolchainFile": "$env{KOS_CMAKE_TOOLCHAIN}",
+            "cacheVariables": {
+                "DREAMCAST": true,
+                "GB_APU_CXX": false // cxx version breaks for some reason
+            }
+        },
+        {
+            "name": "ps1",
+            "displayName": "ps1",
+            "inherits": [ "core" ],
+            "toolchainFile": "$env{PSN00BSDK_LIBS}/cmake/sdk.cmake",
+            "cacheVariables": {
+                "PS1": true,
+                "GB_APU_CXX": false, // math.h is not available
+                "GBS_ENABLE_LRU": true
+            }
+        },
+        {
+            "name": "ps2",
+            "displayName": "ps2",
+            "inherits": [ "core" ],
+            "toolchainFile": "$env{PS2DEV}/share/ps2dev.cmake",
+            "cacheVariables": {
+                "PS2": true
+            }
+        },
+        {
+            "name": "ps4",
+            "displayName": "ps4",
+            "inherits": [ "core" ],
+            "toolchainFile": "$env{OO_PS4_TOOLCHAIN}/cmake/ps4.cmake",
+            "cacheVariables": {
+                "PS4": true
+            }
+        },
+        {
+            "name": "psp",
+            "displayName": "psp",
+            "inherits": [ "core" ],
+            "toolchainFile": "$env{PSPDEV}/psp/share/pspdev.cmake",
+            "cacheVariables": {
+                "PSP": true
+            }
+        },
+        {
+            "name": "vita",
+            "displayName": "vita",
+            "inherits": [ "core" ],
+            "toolchainFile": "$env{VITASDK}/share/vita.toolchain.cmake",
+            "cacheVariables": {
+                "VITA": true
+            }
+        },
+        {
+            "name": "xbox",
+            "displayName": "xbox",
+            "inherits": [ "core" ],
+            "toolchainFile": "${sourceDir}/cmake/toolchain/nxdk.cmake",
+            "cacheVariables": {
+                "XBOX": true,
+                "GB_APU_CXX": false
+            }
+        },
+        {
+            "name": "xbox360",
+            "displayName": "xbox360",
+            "inherits": [ "core" ],
+            "toolchainFile": "${sourceDir}/cmake/toolchain/xenon.cmake",
+            "cacheVariables": {
+                "XBOX360": true
+            }
+        },
+        {
+            "name": "emscripten",
+            "displayName": "emscripten",
+            "inherits": [ "core" ],
+            "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+            "cacheVariables": {
+                "EMSCRIPTEN": true
+            }
+        },
+        {
+            "name": "emscripten-dev",
+            "displayName": "emscripten-dev",
+            "inherits": [ "core-dev" ],
+            "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+            "cacheVariables": {
+                "EMSCRIPTEN": true,
+                "EMRUN": true
+            }
+        },
+        {
+            "name": "android",
+            "displayName": "android",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "hidden": true,
+            "toolchainFile": "${sourceDir}/cmake/toolchain/android.cmake",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                // this is the ndk version.
+                // if this isn't set, my toolchain file will find the
+                // first ndk folder (if any).
+                // it's best to manually set the ndk version wanted!
+                "ANDROID_NDK_SDK": "26.2.11394342",
+                // this is the sdk to compile with. it can be >= or <=
+                // to the ANDROID_NATIVE_API_LEVEL version.
+                "ANDROID_COMPILE_SDK": "34"
+                // this is the minSdkVersion.
+                // ndk can and will override this value if the value
+                // is an alias or that minimum platform is no longer
+                // supported, in which case, it sets an new minimum.
+                // "ANDROID_NATIVE_API_LEVEL": "28",
+                // this is targetSdkVersion/
+                // only used for setting the target version in manifest
+                // "ANDROID_TARGET_SDK": "9",
+            }
+        },
+        {
+            "name": "android-armeabi",
+            "displayName": "android-armeabi",
+            "inherits":["android"],
+            "cacheVariables": {
+                "ANDROID_ABI": "armeabi",
+                // the first version that added cmake.
+                "ANDROID_NDK_SDK": "14.1.3816874",
+                // clang is broken for some reason.
+                "ANDROID_TOOLCHAIN": "gcc",
+                "ANDROID_TARGET_SDK": "24",
+                "ANDROID_NATIVE_API_LEVEL": "9"
+            }
+        },
+        {
+            "name": "android-armeabi-v7a",
+            "displayName": "android-armeabi-v7a",
+            "inherits":["android"],
+            "cacheVariables": {
+                "ANDROID_ABI": "armeabi-v7a",
+                // comment this out to use latest version.
+                "ANDROID_NDK_SDK": "25.2.9519653",
+                "ANDROID_NATIVE_API_LEVEL": "19",
+                "ANDROID_TARGET_SDK": "32",
+                "ANDROID_ARM_NEON": "ON"
+            }
+        },
+        {
+            "name": "android-arm64-v8a",
+            "displayName": "android-arm64-v8a",
+            "inherits":["android"],
+            "cacheVariables": {
+                "ANDROID_ABI": "arm64-v8a",
+                "ANDROID_TARGET_SDK": "34"
+            }
+        },
+        {
+            "name": "android-x86",
+            "displayName": "android-x86",
+            "inherits":["android"],
+            "cacheVariables": {
+                "ANDROID_ABI": "x86",
+                "ANDROID_TARGET_SDK": "34"
+            }
+        },
+        {
+            "name": "android-x86_64",
+            "displayName": "android-x86_64",
+            "inherits":["android"],
+            "cacheVariables": {
+                "ANDROID_ABI": "x86_64",
+                "ANDROID_TARGET_SDK": "34"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "pc",
+            "configurePreset": "pc",
+            "jobs": 6
+        },
+        {
+            "name": "pc-dev",
+            "configurePreset": "pc-dev",
+            "jobs": 6
+        },
+        {
+            "name": "gba",
+            "configurePreset": "gba",
+            "jobs": 6
+        },
+        {
+            "name": "nds",
+            "configurePreset": "nds",
+            "jobs": 6
+        },
+        {
+            "name": "3ds",
+            "configurePreset": "3ds",
+            "jobs": 6
+        },
+        {
+            "name": "n64",
+            "configurePreset": "n64",
+            "jobs": 6
+        },
+        {
+            "name": "gamecube",
+            "configurePreset": "gamecube",
+            "jobs": 6
+        },
+        {
+            "name": "wii",
+            "configurePreset": "wii",
+            "jobs": 6
+        },
+        {
+            "name": "wiiu",
+            "configurePreset": "wiiu",
+            "jobs": 6
+        },
+        {
+            "name": "switch",
+            "configurePreset": "switch",
+            "jobs": 6
+        },
+        {
+            "name": "dreamcast",
+            "configurePreset": "dreamcast",
+            "jobs": 6
+        },
+        {
+            "name": "ps1",
+            "configurePreset": "ps1",
+            "jobs": 6
+        },
+        {
+            "name": "ps2",
+            "configurePreset": "ps2",
+            "jobs": 6
+        },
+        {
+            "name": "ps3",
+            "configurePreset": "ps3",
+            "jobs": 6
+        },
+        {
+            "name": "ps4",
+            "configurePreset": "ps4",
+            "jobs": 6
+        },
+        {
+            "name": "psp",
+            "configurePreset": "psp",
+            "jobs": 6
+        },
+        {
+            "name": "vita",
+            "configurePreset": "vita",
+            "jobs": 6
+        },
+        {
+            "name": "xbox",
+            "configurePreset": "xbox",
+            "jobs": 6
+        },
+        {
+            "name": "xbox360",
+            "configurePreset": "xbox360",
+            "jobs": 6
+        },
+        {
+            "name": "emscripten",
+            "configurePreset": "emscripten",
+            "jobs": 6
+        },
+        {
+            "name": "emscripten-dev",
+            "configurePreset": "emscripten-dev",
+            "jobs": 6
+        },
+        {
+            "name": "android-armeabi",
+            "configurePreset": "android-armeabi",
+            "description": "ARMv5, minSdk=9 (2.3)"
+        },
+        {
+            "name": "android-armeabi-v7a",
+            "configurePreset": "android-armeabi-v7a",
+            "description": "ARMv7a, minSdk=19 (4.4)"
+        },
+        {
+            "name": "android-arm64-v8a",
+            "configurePreset": "android-arm64-v8a",
+            "description": "ARMv8a, minSdk=21 (5.0)"
+        },
+        {
+            "name": "android-x86",
+            "configurePreset": "android-x86"
+        },
+        {
+            "name": "android-x86_64",
+            "configurePreset": "android-x86_64"
+        }
+    ]
+}
