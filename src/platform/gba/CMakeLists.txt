@@ -8,7 +8,13 @@ project(TotalGBS
 set(USE_M3U ON)
 add_subdirectory(${CMAKE_SOURCE_DIR}/src/platform/common binary_dir)
 
-add_executable(TotalGBS main.c)
+add_executable(TotalGBS
+    main.c
+    io_ezfo.c
+    ff16/diskio.c
+    ff16/ff.c
+    ff16/ffunicode.c
+)
 
 set_target_properties(TotalGBS PROPERTIES
     C_STANDARD 99
@@ -21,6 +27,8 @@ target_compile_options(TotalGBS PRIVATE
     -Wextra
     -Wno-unused-parameter
 )
+
+target_include_directories(TotalGBS PRIVATE ff16)
 
 target_link_libraries(TotalGBS PRIVATE gbs common)
 

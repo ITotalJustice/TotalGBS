@@ -97,11 +97,8 @@ for filename in os.listdir(ROM_DIR):
             outFile.seek(OFFSET, 0)
 
             # write out struct and m3u data
-            if (BIG_ENDIAN):
-                outFile.write(struct.pack('>IIII', 0x454D5530, gbs_size, gbs_offset, m3u_size))
-            else:
-                outFile.write(struct.pack('<IIII', 0x454D5530, gbs_size, gbs_offset, m3u_size))
-
+            fmt = '>IIII' if BIG_ENDIAN else '<IIII'
+            outFile.write(struct.pack(fmt, 0x454D5530, gbs_size, gbs_offset, m3u_size))
             outFile.write(m3u_data)
 
             # write out gbs data

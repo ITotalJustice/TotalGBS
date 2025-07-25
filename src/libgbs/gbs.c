@@ -33,6 +33,24 @@
 #define LR35902_IMPLEMENTATION
 #include <LR35902.h>
 
+#if defined(__has_builtin)
+    #define HAS_BUILTIN(x) __has_builtin(x)
+#else
+    #if defined(__GNUC__)
+        #define HAS_BUILTIN(x) (1)
+    #else
+        #define HAS_BUILTIN(x) (0)
+    #endif
+#endif // __has_builtin
+
+#if HAS_BUILTIN(__builtin_expect)
+    #define LIKELY(c) (__builtin_expect(c,1))
+    #define UNLIKELY(c) (__builtin_expect(c,0))
+#else
+    #define LIKELY(c) ((c))
+    #define UNLIKELY(c) ((c))
+#endif // __has_builtin(__builtin_expect)
+
 #ifndef GBS_LOGS
     #define GBS_LOGS 0
 #endif
@@ -268,7 +286,7 @@ static void LR35902_on_halt(void* user)
 
     extern bool gbs_on_breakpoint(void);
 
-    if (gbs_on_breakpoint())
+    if UNLIKELY(gbs_on_breakpoint())
     {
         return;
     }
@@ -562,7 +580,7 @@ uint8_t LR35902_read(void* user, uint16_t addr)
 {
     Gbs* gbs = user;
 
-    if (addr < 0xFE00)
+    if LIKELY(addr < 0xFE00)
     {
         return gbs->mem.rmap[addr >> 12][addr & 0xFFF];
     }
@@ -614,12 +632,12 @@ void LR35902_write(void* user, uint16_t addr, uint8_t value)
 {
     Gbs* gbs = user;
 
-    if (addr >= 0xA000 && addr <= 0xFDFF)
+    if LIKELY(addr >= 0xA000 && addr <= 0xFDFF)
     {
         gbs->mem.wmap[addr >> 12][addr & 0xFFF] = value;
     }
     // io
-    else if (addr >= 0xFF00 && addr <= 0xFF7F)
+    else if LIKELY(addr >= 0xFF00 && addr <= 0xFF7F)
     {
         io_write(gbs, addr, value);
     }
@@ -1149,10 +1167,10 @@ void gbs_run(Gbs* gbs, unsigned cycles)
     gbs->end_frame = false;
     scheduler_add(&gbs->scheduler, Event_END_FRAME, cycles, on_endframe_event, gbs);
 
-    while (!gbs->end_frame)
+    while LIKELY(!gbs->end_frame)
     {
         // keep ticking cpu until it needs syncing.
-        if (!gbs->waiting_vsync)
+        if LIKELY(!gbs->waiting_vsync)
         {
             LR35902_run(&gbs->cpu);
             scheduler_tick(&gbs->scheduler, gbs->cpu.cycles);
@@ -1164,7 +1182,7 @@ void gbs_run(Gbs* gbs, unsigned cycles)
         }
 
         // fire scheduler if needed
-        if (scheduler_should_fire(&gbs->scheduler))
+        if UNLIKELY(scheduler_should_fire(&gbs->scheduler))
         {
             scheduler_fire(&gbs->scheduler);
         }
@@ -1176,7 +1194,9 @@ void gbs_run(Gbs* gbs, unsigned cycles)
 #else
 void IWRAM_CODE gbs_run(Gbs* gbs, unsigned cycles)
 {
-    while (1)
+    extern bool gbs_should_quit;
+
+    while LIKELY(!gbs_should_quit)
     {
         LR35902_run(&gbs->cpu);
     }

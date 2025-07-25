@@ -5,13 +5,22 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ff.h"
+#include "io_ezfo.h"
 #include "gbs.h"
 #include "m3u/m3u.h"
+
+#define IWRAM_BSS __attribute__((section(".bss")))
 
 struct Archive
 {
     struct M3uSongInfo* infos;
     size_t m3u_count;
+};
+
+struct FileIo
+{
+    FIL fp;
 };
 
 struct MemIo
@@ -20,12 +29,50 @@ struct MemIo
     size_t size;
 };
 
+struct FileEntry {
+    char name[100];
+    bool is_dir;
+};
+
+#define FILE_ENTRY_MAX 30
+static struct FileEntry EWRAM_BSS g_file_entries[FILE_ENTRY_MAX];
+static unsigned EWRAM_BSS g_file_index;
+static unsigned EWRAM_BSS g_file_count;
+
 static Gbs* EWRAM_BSS gbs;
 static struct GbsMeta EWRAM_BSS gbs_meta;
 static const struct M3uSongInfo* EWRAM_BSS m3u_info;
 static struct Archive EWRAM_BSS archive;
 static unsigned char EWRAM_BSS cursor;
-static unsigned char EWRAM_BSS lru_pool[1024 * 16 * 8]; // 64k free.
+static unsigned char EWRAM_BSS lru_pool[GBS_BANK_SIZE * 8]; // 64k free.
+bool IWRAM_BSS gbs_should_quit;
+
+static void _Noreturn error_loop(const char* msg)
+{
+    iprintf(CON_CLS());
+    iprintf("TotalGBS: " LIBGBS_VERSION_STR);
+    iprintf("\n\n");
+    iprintf("%s\n", msg);
+    while(1) VBlankIntrWait();
+}
+
+static size_t EWRAM_CODE io_file_read(void* user, void* dst, size_t size, size_t addr)
+{
+    struct FileIo* io = user;
+    if (addr != f_tell(&io->fp))
+    {
+        f_lseek(&io->fp, addr);
+    }
+    UINT bytes_read = 0;
+    f_read(&io->fp, dst, size, &bytes_read);
+    return bytes_read;
+}
+
+static size_t io_file_size(void* user)
+{
+    const struct FileIo* io = user;
+    return f_size(&io->fp);
+}
 
 static size_t EWRAM_CODE io_mem_read(void* user, void* dst, size_t size, size_t addr)
 {
@@ -51,52 +98,36 @@ static size_t io_mem_size(void* user)
     return io->size;
 }
 
+static const struct GbsIo EWRAM_DATA FILEIO = {
+    .user = NULL,
+    .read = io_file_read,
+    .size = io_file_size,
+};
+
 static const struct GbsIo EWRAM_DATA MEMIO = {
     .user = NULL,
     .read = io_mem_read,
     .size = io_mem_size,
 };
 
-static int cmpfunc(const void* a, const void* b)
+static int cmpfunc(const void* restrict a, const void* restrict b)
 {
     const struct M3uSongInfo* info_a = a;
     const struct M3uSongInfo* info_b = b;
     return (int)info_a->songno - (int)info_b->songno;
 }
 
-static void archive_close(struct Archive* archive)
-{
-    for (size_t i = 0; i < archive->m3u_count; i++)
-    {
-        m3u_info_free(&archive->infos[i]);
-    }
-    memset(archive, 0, sizeof(*archive));
-}
-
-static bool load_archive_data(Gbs* gbs, const void* data, size_t size, struct Archive* archive)
+static bool load_archive(Gbs* gbs, struct GbsIo* io, struct Archive* archive)
 {
     memset(archive, 0, sizeof(*archive));
-
-    static struct MemIo memio;
-    memio.data = data;
-    memio.size = size;
-
-    struct GbsIo io = MEMIO;
-    io.user = &memio;
 
     struct GbsIo lio;
-    if (!gbs_lru_init(&io, &lio, lru_pool, sizeof(lru_pool)))
+    if (!gbs_lru_init(io, &lio, lru_pool, sizeof(lru_pool)))
     {
         return false;
     }
 
     return gbs_load_io(gbs, &lio);
-}
-
-static void error_loop(const char* msg)
-{
-    iprintf("%s\n", msg);
-    while(1) VBlankIntrWait();
 }
 
 static const struct M3uSongInfo* EWRAM_CODE find_info_from_song(const struct Archive* archive, unsigned song)
@@ -114,6 +145,7 @@ static const struct M3uSongInfo* EWRAM_CODE find_info_from_song(const struct Arc
 
 static void EWRAM_CODE play_song(unsigned song)
 {
+    cursor = song % gbs_meta.max_song;
     gbs_set_song(gbs, song % gbs_meta.max_song);
     m3u_info = find_info_from_song(&archive, gbs_get_song(gbs));
 }
@@ -158,6 +190,18 @@ bool gbs_on_breakpoint(void)
         draw_menu();
         return true;
     }
+    else if ((kdown & KEY_UP) || kdown & KEY_RIGHT)
+    {
+        cursor = (cursor + 1) % gbs_meta.max_song;
+        play_song(cursor);
+        draw_menu();
+        return true;
+    }
+    else if ((kdown & KEY_B) && g_file_count)
+    {
+        gbs_should_quit = true;
+        return true;
+    }
 
     return false;
 }
@@ -177,16 +221,28 @@ enum { ROM_M3U_OFFSET = ROM_META_OFFSET + sizeof(struct RomMeta) };
 
 #define GBA_ROM8 (const u8*)(0x08000000)
 
-int main(void)
-{
-    irqInit();
-	irqEnable(IRQ_VBLANK);
-    consoleDemoInit();
-    // set the screen colors, color 0 is the background color
-    // the foreground color is index 1 of the selected 16 color palette
-    BG_COLORS[0] = RGB8(0,0,0); // RGB8(58,110,165);
-    BG_COLORS[241] = RGB5(31,31,31);
+static void play(void) {
+    gbs_should_quit = false;
 
+    if (!gbs_get_meta(gbs, &gbs_meta))
+    {
+        error_loop("failed to get gbs meta\n");
+    }
+
+    play_song(0);
+    draw_menu();
+    gbs_run(gbs, 0);
+
+    // disable audio on exit.
+    *(vu8*)(0x04000084) = 0x00;
+
+    // restore default irq.
+    irqDisable(0xFFFF);
+    irqEnable(IRQ_VBLANK);
+}
+
+static bool load_from_mem(void)
+{
     struct RomMeta rom_meta = {0};
     // NOTE: don't use dma here as some emulators timing sucks (including mine).
     memcpy(&rom_meta, GBA_ROM8 + ROM_META_OFFSET, sizeof(rom_meta));
@@ -196,17 +252,22 @@ int main(void)
     if (rom_meta.magic != 0x454D5530)
     {
         iprintf("\ngot magic: %lX wanted: %X\n", rom_meta.magic, 0x454D5530);
-        error_loop("unable to find rom_meta magic :(\n");
+        return false;
     }
 
-    gbs = gbs_init(0);
+    static struct MemIo memio;
+    memio.data = GBA_ROM8 + rom_meta.offset;
+    memio.size = rom_meta.size;
 
-    if (!load_archive_data(gbs, GBA_ROM8 + rom_meta.offset, rom_meta.size, &archive))
+    struct GbsIo io = MEMIO;
+    io.user = &memio;
+
+    if (!load_archive(gbs, &io, &archive))
     {
-        archive_close(&archive);
-        error_loop("bad gbs\n");
+        error_loop("bad gbs mem\n");
     }
 
+    // try and load m3u data, if it exists.
     u32 m3u_offset = ROM_M3U_OFFSET;
     while (m3u_offset < ROM_M3U_OFFSET + rom_meta.m3u_size)
     {
@@ -228,13 +289,186 @@ int main(void)
 
     qsort(archive.infos, archive.m3u_count, sizeof(*archive.infos), cmpfunc);
 
-    gbs_get_meta(gbs, &gbs_meta);
-    play_song(0);
-    draw_menu();
-    gbs_run(gbs, 0);
+    play();
+    return true;
+}
 
-    archive_close(&archive);
-    gbs_quit(gbs);
+static void load_from_file(const char* rpath)
+{
+    static FIL EWRAM_BSS file;
+    if (FR_OK != f_open(&file, rpath, FA_READ)) {
+        error_loop(rpath);
+    }
 
-    return 0;
+    static struct FileIo EWRAM_BSS fileio;
+    memcpy(&fileio.fp, &file, sizeof(fileio.fp));
+
+    struct GbsIo io = FILEIO;
+    io.user = &fileio;
+
+    if (!load_archive(gbs, &io, &archive)) {
+        error_loop("bad gbs file\n");
+    }
+
+    play();
+}
+
+static bool scan_dir(const char* rpath)
+{
+    if (FR_OK != f_chdir(rpath)) {
+        error_loop("failed to chdir\n");
+    }
+
+    DIR dir;
+    if (FR_OK != f_opendir(&dir, "./")) {
+        error_loop("failed to open dir\n");
+    }
+
+    FILINFO info;
+    unsigned count = 0;
+    while (1) {
+        if (FR_OK != f_readdir(&dir, &info) || info.fname[0] == '\0') {
+            break;
+        }
+
+        struct FileEntry* e = &g_file_entries[count];
+        if (info.fattrib & AM_DIR) {
+            e->is_dir = true;
+        } else {
+            const char* ext = strrchr(info.fname, '.');
+            if (!ext || strcasecmp(ext, ".gbs") || !info.fsize) {
+                continue;
+            }
+
+            e->is_dir = false;
+        }
+
+        snprintf(e->name, sizeof(e->name), "%s", info.fname);
+        // strncpy(e->name, info.fname, sizeof(e->name) - 1);
+        // e->name[sizeof(e->name) - 1] = '\0';
+
+        count++;
+        if (count >= FILE_ENTRY_MAX) {
+            break;
+        }
+    }
+
+    f_closedir(&dir);
+    g_file_index = 0;
+    g_file_count = count;
+
+    return true;
+}
+
+static void dir_loop(void)
+{
+    bool redraw = true;
+    scan_dir("/");
+
+    while (1)
+    {
+        scanKeys();
+        const u16 kdown = keysDown();
+
+        if (kdown & KEY_DOWN) // scroll down.
+        {
+            if (g_file_index + 1 < g_file_count)
+            {
+                g_file_index++;
+                redraw = true;
+            }
+        }
+        else if (kdown & KEY_UP) // scroll up.
+        {
+            if (g_file_index)
+            {
+                g_file_index--;
+                redraw = true;
+            }
+        }
+        else if (kdown & KEY_A) // select.
+        {
+            if (g_file_count)
+            {
+                // open new folder.
+                if (g_file_entries[g_file_index].is_dir)
+                {
+                    scan_dir(g_file_entries[g_file_index].name);
+                    redraw = true;
+                }
+                // open gbs file.
+                else
+                {
+                    load_from_file(g_file_entries[g_file_index].name);
+                    redraw = true;
+                }
+            }
+        }
+        else if (kdown & KEY_B) // walk up.
+        {
+            scan_dir("..");
+            redraw = true;
+        }
+
+        // if set, re-draw the screen.
+        if (redraw)
+        {
+            redraw = false;
+
+            iprintf(CON_CLS());
+            iprintf("TotalGBS: " LIBGBS_VERSION_STR);
+            iprintf("\n\n");
+
+            // todo: add scrolling.
+            for (unsigned i = 0; i < 10; i++)
+            {
+                if (i >= g_file_count)
+                {
+                    break;
+                }
+
+                // todo: text wrap around.
+                const struct FileEntry* e = &g_file_entries[i];
+                const char* selected = i == g_file_index ? "-> " : "";
+                iprintf("%s%s%c\n", selected, e->name, e->is_dir ? '/' : ' ');
+            }
+
+            iprintf(CON_POS(0, 19) "%03u / %03u", g_file_index + 1, g_file_count);
+        }
+
+        VBlankIntrWait();
+    }
+}
+
+int main(void)
+{
+    irqInit();
+	irqEnable(IRQ_VBLANK);
+    consoleDemoInit();
+    // set the screen colors, color 0 is the background color
+    // the foreground color is index 1 of the selected 16 color palette
+    BG_COLORS[0] = RGB8(0,0,0); // RGB8(58,110,165);
+    BG_COLORS[241] = RGB5(31,31,31);
+
+    gbs = gbs_init(0);
+    if (!gbs)
+    {
+        error_loop("failed to alloc gbs\n");
+    }
+
+    // try and load embed rom.
+    if (!load_from_mem())
+    {
+        // fall back to file, this won't return if it fails.
+        FATFS fs;
+        if (FR_OK != f_mount(&fs, "", 1))
+        {
+            error_loop("failed to mount sd card\n");
+        }
+
+        dir_loop();
+
+        // for debugging.
+        // load_from_file("/gbs/DMG-ME-USA.gbs");
+    }
 }
