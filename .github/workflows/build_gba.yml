@@ -8,11 +8,21 @@ jobs:
     container: devkitpro/devkitarm:latest
 
     steps:
+      # fetch latest cmake
+    - uses: lukka/get-cmake@v3.31.6
+
     - name: Checkout
       uses: actions/checkout@master
 
-    - name: Setup
+    - name: Configure CMake
       run: cmake --preset gba
 
     - name: Build
       run: cmake --build --preset gba
+
+    - name: Deploy
+      if: ${{ github.event_name != 'pull_request' && github.event.action != 'unassigned' }}
+      uses: actions/upload-artifact@master
+      with:
+        name: TotalGBS-GBA
+        path: build/gba/src/platform/gba/TotalGBS.gba

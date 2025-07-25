@@ -363,11 +363,6 @@
             "jobs": 6
         },
         {
-            "name": "ps3",
-            "configurePreset": "ps3",
-            "jobs": 6
-        },
-        {
             "name": "ps4",
             "configurePreset": "ps4",
             "jobs": 6
