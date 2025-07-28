@@ -37,6 +37,7 @@ gba_create_rom(TotalGBS
     GAMECODE "TGBS"
     MAKERCODE "TJ"
     VERSION ${LIBGBS_VERSION}
+    PAD
 )
 
 # place uncompressed roms in this directory

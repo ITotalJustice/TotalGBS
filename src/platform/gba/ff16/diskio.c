@@ -10,6 +10,9 @@
 #include "ff.h"			/* Obtains integer types */
 #include "diskio.h"		/* Declarations of disk functions */
 #include "../io_ezfo.h"
+#include <string.h>
+
+extern u8 ALIGN(2) EWRAM_BSS _ezio_align_buf[512 * 4];
 
 /*-----------------------------------------------------------------------*/
 /* Get Drive Status                                                      */
@@ -32,6 +35,10 @@ DSTATUS disk_initialize (
 	BYTE pdrv				/* Physical drive nmuber to identify the drive */
 )
 {
+	if (!EZFO_init()) {
+		return RES_ERROR;
+	}
+
 	return RES_OK;
 }
 
@@ -48,7 +55,7 @@ DRESULT disk_read (
 	UINT count		/* Number of sectors to read */
 )
 {
-	if (!_EZFO_readSectors(sector, count, buff)) {
+	if (!EZFO_readSectors(sector, count, buff)) {
 		return RES_ERROR;
 	}
 
@@ -70,8 +77,22 @@ DRESULT disk_write (
 	UINT count			/* Number of sectors to write */
 )
 {
-	if (!_EZFO_writeSectors(sector, count, buff)) {
-		return RES_ERROR;
+	// if we are copying from rom, write to tmp buf
+	if ((u32)buff >= 0x08000000 && (u32)buff < 0x0E000000) {
+		for (u16 i = 0; i < count; i += 4) {
+			const u16 blocks = (count - i > 4) ? 4 : (count - i);
+			const u32 size = blocks * 512;
+
+			memcpy(_ezio_align_buf, buff + i * 512, size);
+			if (!EZFO_writeSectors(sector + i, blocks, _ezio_align_buf)) {
+				return RES_ERROR;
+			}
+		}
+	}
+	else {
+		if (!EZFO_writeSectors(sector, count, buff)) {
+			return RES_ERROR;
+		}
 	}
 
 	return RES_OK;

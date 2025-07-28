@@ -1200,6 +1200,10 @@ void IWRAM_CODE gbs_run(Gbs* gbs, unsigned cycles)
     {
         LR35902_run(&gbs->cpu);
     }
+
+    // disable audio and timers on exit.
+    REG_SOUNDCNT_X = 0;
+    REG_TM1CNT_H = 0;
 }
 #endif
 

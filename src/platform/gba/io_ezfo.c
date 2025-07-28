@@ -9,9 +9,26 @@
 #include "io_ezfo.h"
 #include <gba_dma.h>
 #include <gba_interrupt.h>
-#include <string.h>
 
-static u8 ALIGN(4) EWRAM_BSS g_buf[512 * 4];
+#if 0
+extern bool EWRAM_BSS _force_align;
+#else
+#define _force_align 1
+#endif
+
+// max size per transfer, aligned for dma transfer.
+u8 ALIGN(2) EWRAM_BSS _ezio_align_buf[512 * 4];
+
+// version of memcpy that resides in call location rather than rom.
+#define memcpy_inline(_dst, _src, _len) do { \
+    const u32 len = _len;                    \
+    const u8* restrict src = _src;           \
+    u8* restrict dst = _dst;                 \
+    for (u32 i = 0; i < len; i++)            \
+    {                                        \
+        dst[i] = src[i];                     \
+    }                                        \
+} while (0)
 
 // SOURCE: https://github.com/ez-flash/omega-de-kernel/blob/main/source/Ezcard_OP.c
 static void EWRAM_CODE delay(u32 R0)
@@ -52,44 +69,28 @@ static u16 EWRAM_CODE SD_Response(void)
     return *(vu16 *)0x9E00000;
 }
 // --------------------------------------------------------------------
-static u32 EWRAM_CODE Wait_SD_Response()
+static bool EWRAM_CODE Wait_SD_Response()
 {
-    vu16 res;
-    u32 count=0;
-    while(1)
+    for (u32 i = 0; i < 0x100000; i++)
     {
-        res = SD_Response();
-        if(res != 0xEEE1)
+        const u16 res = SD_Response();
+        if (res != 0xEEE1)
         {
-            return 0;
-        }
-
-        count++;
-        if(count>0x100000)
-        {
-            //DEBUG_printf("time out %x",res);
-            //wait_btn();
-            return 1;
+            return true;
         }
     }
+
+    return false;
 }
 // --------------------------------------------------------------------
-static u32 EWRAM_CODE Read_SD_sectors(u32 address,u16 count,u8* SDbuffer)
+static bool EWRAM_CODE Read_SD_sectors(u32 address, u16 count, u8* SDbuffer)
 {
     SD_Enable();
 
-    u8* wbuf = SDbuffer;
-    if ((u32)SDbuffer & 0x1) {
-        wbuf = g_buf;
-    }
-
-    u16 i;
-    u16 blocks;
-    u32 res;
-    u32 times=2;
-    for(i=0;i<count;i+=4)
+    u32 times = 2;
+    for (u16 i = 0; i < count; i += 4)
     {
-        blocks = (count-i>4)?4:(count-i);
+        const u16 blocks = (count - i > 4) ? 4 : (count - i);
         const u32 size = blocks * 512;
 
     read_again:
@@ -101,10 +102,12 @@ static u32 EWRAM_CODE Read_SD_sectors(u32 address,u16 count,u8* SDbuffer)
         *(vu16 *)0x9620000 = ((address+i)&0xFFFF0000) >>16;
         *(vu16 *)0x9640000 = blocks;
         *(vu16 *)0x9fc0000 = 0x1500;
+
         SD_Read_state();
-        res = Wait_SD_Response();
+        const bool res = Wait_SD_Response();
         SD_Enable();
-        if(res==1)
+
+        if (!res)
         {
             times--;
             if(times)
@@ -114,43 +117,41 @@ static u32 EWRAM_CODE Read_SD_sectors(u32 address,u16 count,u8* SDbuffer)
             }
         }
 
-        dmaCopy((void*)0x9E00000, wbuf, size);
-
-        if ((u32)SDbuffer & 0x1) {
-            // don't call memcpy because we have no rom to jump to!
-            for (u32 j = 0; j < size; j++) {
-                SDbuffer[j+i*512] = g_buf[j];
-            }
-        } else {
-            wbuf += size;
+        if (_force_align && (u32)SDbuffer & 0x1)
+        {
+            dmaCopy((void*)0x9E00000, _ezio_align_buf, size);
+            memcpy_inline(SDbuffer + i * 512, _ezio_align_buf, size);
+        }
+        else
+        {
+            dmaCopy((void*)0x9E00000, SDbuffer + i * 512, size);
         }
     }
+
     SD_Disable();
-    return 0;
+    return true;
 }
 // --------------------------------------------------------------------
-static u32 EWRAM_CODE Write_SD_sectors(u32 address,u16 count, const u8* SDbuffer)
+static bool EWRAM_CODE Write_SD_sectors(u32 address, u16 count, const u8* SDbuffer)
 {
     SD_Enable();
     SD_Read_state();
-    u16 i;
-    u16 blocks;
-    u32 res;
-    for(i=0;i<count;i+=4)
+
+    for (u16 i = 0; i < count; i += 4)
     {
-        blocks = (count-i>4)?4:(count-i);
+        const u16 blocks = (count - i > 4) ? 4 : (count - i);
         const u32 size = blocks * 512;
 
-        const u8* rbuf = SDbuffer + i*512;
-        if ((u32)SDbuffer & 0x1) {
-            rbuf = g_buf;
-            // don't call memcpy because we have no rom to jump to!
-            for (u32 j = 0; j < size; j++) {
-                g_buf[j] = SDbuffer[j+i*512];
-            }
+        if (_force_align && (u32)SDbuffer & 0x1)
+        {
+            memcpy_inline(_ezio_align_buf, SDbuffer + i * 512, size);
+            dmaCopy(_ezio_align_buf, (void*)0x9E00000, size);
+        }
+        else
+        {
+            dmaCopy(SDbuffer + i * 512, (void*)0x9E00000, size);
         }
 
-        dmaCopy(rbuf,(void*)0x9E00000, size);
         *(vu16 *)0x9fe0000 = 0xd200;
         *(vu16 *)0x8000000 = 0x1500;
         *(vu16 *)0x8020000 = 0xd200;
@@ -160,13 +161,16 @@ static u32 EWRAM_CODE Write_SD_sectors(u32 address,u16 count, const u8* SDbuffer
         *(vu16 *)0x9640000 = 0x8000+blocks;
         *(vu16 *)0x9fc0000 = 0x1500;
 
-        res = Wait_SD_Response();
-        if(res==1)
-            return 1;
+        const bool res = Wait_SD_Response();
+        if (!res)
+        {
+            return false;
+        }
     }
+
     delay(3000);
     SD_Disable();
-    return 0;
+    return true;
 }
 // --------------------------------------------------------------------
 static void EWRAM_CODE SetRompage(u16 page)
@@ -186,6 +190,23 @@ static void EWRAM_CODE SetRompage(u16 page)
 #define ROM_HEADER_CHECKSUM *(vu16*)(0x8000000 + 188)
 
 static u16 EWRAM_BSS ROMPAGE_ROM;
+static bool EWRAM_BSS CHECKED_ROMPAGE;
+static bool EWRAM_BSS ROMPAGE_RESULT;
+
+// disables ime and re-enables it at the end of the scope.
+#define SCOPED_IME(...)      \
+    const u16 ime = REG_IME; \
+    REG_IME = 0;             \
+    __VA_ARGS__              \
+    REG_IME = ime;
+
+// in adition to the above, also sets the rompage and restores as the end of the scope.
+#define SCOPED_ROMPAGE(func)            \
+    SCOPED_IME(                         \
+        SetRompage(ROMPAGE_BOOTLOADER); \
+        func                            \
+        SetRompage(ROMPAGE_ROM);        \
+    )
 
 // returns true if the data is a match
 static bool EWRAM_CODE _EZFO_TestRompage(u16 wanted, u16 page)
@@ -201,6 +222,15 @@ static bool EWRAM_CODE _EZFO_TestRompage(u16 wanted, u16 page)
 
 static bool EWRAM_CODE _EZFO_startUp(void)
 {
+    // check if we already
+    if (CHECKED_ROMPAGE)
+    {
+        return ROMPAGE_RESULT;
+    }
+
+    // set so that we cache the result.
+    CHECKED_ROMPAGE = true;
+
     const u16 complement = ROM_HEADER_CHECKSUM;
 
     // unmap rom, if the data matches, then this is not an ezflash
@@ -216,7 +246,7 @@ static bool EWRAM_CODE _EZFO_startUp(void)
     }
 
     // try and find it within norflash, test each 1MiB page (512 pages)
-    for (int i = 0; i < S98WS512PE0_FLASH_PAGE_MAX; i++)
+    for (u16 i = 0; i < S98WS512PE0_FLASH_PAGE_MAX; i++)
     {
         if (_EZFO_TestRompage(complement, i))
         {
@@ -228,40 +258,105 @@ static bool EWRAM_CODE _EZFO_startUp(void)
     return false;
 }
 
-bool EWRAM_CODE _EZFO_readSectors(u32 address, u32 count, void * buffer)
+bool EWRAM_CODE EZFO_init(void)
 {
-    const u16 ime = REG_IME;
-    REG_IME = 0;
-    SetRompage(ROMPAGE_BOOTLOADER);
-    const u32 result = Read_SD_sectors(address, count, buffer);
-    SetRompage(ROMPAGE_ROM);
-    REG_IME = ime;
-    return result == 0;
+    if (CHECKED_ROMPAGE)
+    {
+        return ROMPAGE_RESULT;
+    }
+
+    SCOPED_IME(
+        const bool result = _EZFO_startUp();
+    );
+
+    return ROMPAGE_RESULT = result;
 }
 
-bool EWRAM_CODE _EZFO_writeSectors(u32 address, u32 count, const void * buffer)
+bool EWRAM_CODE EZFO_readSectors(u32 address, u32 count, void * buffer)
 {
-    const u16 ime = REG_IME;
-    REG_IME = 0;
-    SetRompage(ROMPAGE_BOOTLOADER);
-    const u32 result = Write_SD_sectors(address, count, buffer);
-    SetRompage(ROMPAGE_ROM);
-    REG_IME = ime;
-    return result == 0;
+    if (!EZFO_init())
+    {
+        return false;
+    }
+
+    SCOPED_ROMPAGE(
+        const bool result = Read_SD_sectors(address, count, buffer);
+    );
+
+    return result;
 }
 
-static bool _EZFO_nop(void)
+bool EWRAM_CODE EZFO_writeSectors(u32 address, u32 count, const void * buffer)
 {
+    if (!EZFO_init())
+    {
+        return false;
+    }
+
+    SCOPED_ROMPAGE(
+        const bool result = Write_SD_sectors(address, count, buffer);
+    );
+
+    return result;
+}
+
+bool EWRAM_CODE EZF0_is_ezflash(void)
+{
+    return EZFO_init();
+}
+
+bool EWRAM_CODE EZF0_is_psram(void)
+{
+    return EZF0_is_ezflash() && ROMPAGE_ROM == ROMPAGE_PSRAM;
+}
+
+bool EWRAM_CODE EZF0_is_norflash(void)
+{
+    return EZF0_is_ezflash() && ROMPAGE_ROM < S98WS512PE0_FLASH_PAGE_MAX;
+}
+
+// set if we are in os mode.
+static bool EWRAM_BSS g_mounted_os;
+// the cached value of ime before disabling it to mount os mode.
+static bool EWRAM_BSS g_cached_ime;
+
+bool EWRAM_CODE EZF0_mount_os(void)
+{
+    if (!EZF0_is_ezflash())
+    {
+        return false;
+    }
+
+    // check if we are already in os mode.
+    if (g_mounted_os)
+    {
+        return true;
+    }
+
+    g_mounted_os = true;
+    g_cached_ime = REG_IME;
+    REG_IME = 0;
+    SetRompage(ROMPAGE_BOOTLOADER);
+
     return true;
 }
 
-const DISC_INTERFACE _io_ezfo = {
-    DEVICE_TYPE_EZFO,
-    FEATURE_MEDIUM_CANREAD | FEATURE_MEDIUM_CANWRITE | FEATURE_SLOT_GBA,
-    ( FN_MEDIUM_STARTUP )&_EZFO_startUp,
-    ( FN_MEDIUM_ISINSERTED )&_EZFO_nop,
-    ( FN_MEDIUM_READSECTORS )&_EZFO_readSectors,
-    ( FN_MEDIUM_WRITESECTORS )&_EZFO_writeSectors,
-    ( FN_MEDIUM_CLEARSTATUS )&_EZFO_nop,
-    ( FN_MEDIUM_SHUTDOWN )&_EZFO_nop
-};
+bool EWRAM_CODE EZF0_mount_rom(void)
+{
+    if (!EZF0_is_ezflash())
+    {
+        return false;
+    }
+
+    // check if we are already in rom mode.
+    if (!g_mounted_os)
+    {
+        return true;
+    }
+
+    g_mounted_os = false;
+    SetRompage(ROMPAGE_ROM);
+    REG_IME = g_cached_ime;
+
+    return true;
+}

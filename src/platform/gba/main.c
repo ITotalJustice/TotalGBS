@@ -1,4 +1,3 @@
-
 #include <gba.h>
 
 #include <stdio.h>
@@ -11,6 +10,10 @@
 #include "m3u/m3u.h"
 
 #define IWRAM_BSS __attribute__((section(".bss")))
+#define NOINLINE __attribute__((noinline))
+
+// enable to load gbs rom into psram rather than using fatfs + lru cache.
+#define EZ_PRELOAD_ROM 0
 
 struct Archive
 {
@@ -29,12 +32,26 @@ struct MemIo
     size_t size;
 };
 
-struct FileEntry {
+struct FileEntry
+{
     char name[100];
     bool is_dir;
 };
 
-#define FILE_ENTRY_MAX 30
+struct RomMeta {
+    uint32_t magic; // 0x454D5530 "EMU0"
+    uint32_t size; // size of rom
+    uint32_t offset; // rom offset
+    uint32_t m3u_size; // total size of all m3u strings
+};
+
+// set this offset so that it is the same size as TotalGBS.gba
+enum { ROM_META_OFFSET = 1024*128 };
+enum { ROM_M3U_OFFSET = ROM_META_OFFSET + sizeof(struct RomMeta) };
+
+#define GBA_ROM8 ((const u8*)0x08000000)
+
+#define FILE_ENTRY_MAX 100
 static struct FileEntry EWRAM_BSS g_file_entries[FILE_ENTRY_MAX];
 static unsigned EWRAM_BSS g_file_index;
 static unsigned EWRAM_BSS g_file_count;
@@ -54,6 +71,46 @@ static void _Noreturn error_loop(const char* msg)
     iprintf("\n\n");
     iprintf("%s\n", msg);
     while(1) VBlankIntrWait();
+}
+
+static bool NOINLINE EWRAM_CODE ezflash_load_file_into_psram(FIL* file)
+{
+    if (!EZF0_is_ezflash())
+    {
+        return false;
+    }
+
+    for (u32 i = 0; !f_eof(file); i += sizeof(lru_pool))
+    {
+        UINT bytes_read;
+        if (FR_OK != f_read(file, lru_pool, sizeof(lru_pool), &bytes_read))
+        {
+            return false;
+        }
+
+        // todo: check why f_read directly into psram doesn't work
+        // todo: the above works in my emulator but not on hw, check why.
+        EZF0_mount_os();
+            dmaCopy(lru_pool, (u8*)(0x08800000 + ROM_META_OFFSET + i), bytes_read + 1);
+        EZF0_mount_rom();
+    }
+
+    return true;
+}
+
+// hack to work around ezflash not clearing psram when loading a rom.
+static void NOINLINE EWRAM_CODE ezflash_reset_psram(void)
+{
+    if (!EZF0_is_psram())
+    {
+        return;
+    }
+
+    if (EZF0_mount_os())
+    {
+        *(vu16*)(0x08800000 + ROM_META_OFFSET) = 0; // null magic.
+        EZF0_mount_rom();
+    }
 }
 
 static size_t EWRAM_CODE io_file_read(void* user, void* dst, size_t size, size_t addr)
@@ -110,11 +167,30 @@ static const struct GbsIo EWRAM_DATA MEMIO = {
     .size = io_mem_size,
 };
 
-static int cmpfunc(const void* restrict a, const void* restrict b)
+static int cmpfunc(const void* a, const void* b)
 {
-    const struct M3uSongInfo* info_a = a;
-    const struct M3uSongInfo* info_b = b;
-    return (int)info_a->songno - (int)info_b->songno;
+    const struct M3uSongInfo* ea = a;
+    const struct M3uSongInfo* eb = b;
+    return (int)ea->songno - (int)eb->songno;
+}
+
+static int sortfunc(const void* a, const void* b)
+{
+    const struct FileEntry* ea = a;
+    const struct FileEntry* eb = b;
+
+    if (ea->is_dir && !eb->is_dir)
+    {
+        return -1;
+    }
+    else if (!ea->is_dir && eb->is_dir)
+    {
+        return 1;
+    }
+    else
+    {
+        return strcasecmp(ea->name, eb->name);
+    }
 }
 
 static bool load_archive(Gbs* gbs, struct GbsIo* io, struct Archive* archive)
@@ -206,21 +282,6 @@ bool gbs_on_breakpoint(void)
     return false;
 }
 
-struct RomMeta {
-    uint32_t magic; // 0x454D5530 "EMU0"
-    uint32_t size; // size of rom
-    uint32_t offset; // rom offset
-    uint32_t m3u_size; // total size of all m3u strings
-};
-
-// set this offset so that it is LARGER than TotalGBS.gba
-// otherwise it will overwrite code!
-// current size is 97k 02/09/2024.
-enum { ROM_META_OFFSET = 1024*128 };
-enum { ROM_M3U_OFFSET = ROM_META_OFFSET + sizeof(struct RomMeta) };
-
-#define GBA_ROM8 (const u8*)(0x08000000)
-
 static void play(void) {
     gbs_should_quit = false;
 
@@ -233,9 +294,6 @@ static void play(void) {
     draw_menu();
     gbs_run(gbs, 0);
 
-    // disable audio on exit.
-    *(vu8*)(0x04000084) = 0x00;
-
     // restore default irq.
     irqDisable(0xFFFF);
     irqEnable(IRQ_VBLANK);
@@ -243,21 +301,52 @@ static void play(void) {
 
 static bool load_from_mem(void)
 {
-    struct RomMeta rom_meta = {0};
-    // NOTE: don't use dma here as some emulators timing sucks (including mine).
-    memcpy(&rom_meta, GBA_ROM8 + ROM_META_OFFSET, sizeof(rom_meta));
-    // dmaCopy(GBA_ROM8 + ROM_META_OFFSET, &rom_meta, sizeof(rom_meta));
+    static struct EWRAM_BSS MemIo memio;
 
-    // try and read meta data
-    if (rom_meta.magic != 0x454D5530)
+    // check if the gbs rom was cat at the end of the gba rom.
+    if (gbs_validate_file_mem(GBA_ROM8 + ROM_META_OFFSET, 4))
     {
-        iprintf("\ngot magic: %lX wanted: %X\n", rom_meta.magic, 0x454D5530);
-        return false;
+        memio.data = GBA_ROM8 + ROM_META_OFFSET;
+        // todo: find out how to calculate size (use open bus?).
+        memio.size = 1024 * 1024 * 1;
     }
+    else
+    {
+        struct RomMeta rom_meta = {0};
+        memcpy(&rom_meta, GBA_ROM8 + ROM_META_OFFSET, sizeof(rom_meta));
 
-    static struct MemIo memio;
-    memio.data = GBA_ROM8 + rom_meta.offset;
-    memio.size = rom_meta.size;
+        // try and read meta data
+        if (rom_meta.magic != 0x454D5530)
+        {
+            iprintf("\ngot magic: %lX wanted: %X\n", rom_meta.magic, 0x454D5530);
+            return false;
+        }
+
+        memio.data = GBA_ROM8 + rom_meta.offset;
+        memio.size = rom_meta.size;
+
+        // try and load m3u data, if it exists.
+        u32 m3u_offset = ROM_M3U_OFFSET;
+        while (m3u_offset < ROM_M3U_OFFSET + rom_meta.m3u_size)
+        {
+            const char* str = (const char*)(GBA_ROM8 + m3u_offset);
+            const size_t len = strlen(str);
+            struct M3uSongInfo m3u_info;
+            if (m3u_info_parse(str, len, &m3u_info))
+            {
+                archive.m3u_count++;
+                archive.infos = realloc(archive.infos, archive.m3u_count * sizeof(*archive.infos));
+                if (!archive.infos)
+                {
+                    error_loop("m3u realloc failed\n");
+                }
+                archive.infos[archive.m3u_count-1] = m3u_info;
+            }
+            m3u_offset += len + 1;
+        }
+
+        qsort(archive.infos, archive.m3u_count, sizeof(*archive.infos), cmpfunc);
+    }
 
     struct GbsIo io = MEMIO;
     io.user = &memio;
@@ -267,27 +356,8 @@ static bool load_from_mem(void)
         error_loop("bad gbs mem\n");
     }
 
-    // try and load m3u data, if it exists.
-    u32 m3u_offset = ROM_M3U_OFFSET;
-    while (m3u_offset < ROM_M3U_OFFSET + rom_meta.m3u_size)
-    {
-        const char* str = (const char*)(GBA_ROM8 + m3u_offset);
-        const size_t len = strlen(str);
-        struct M3uSongInfo m3u_info;
-        if (m3u_info_parse(str, len, &m3u_info))
-        {
-            archive.m3u_count++;
-            archive.infos = realloc(archive.infos, archive.m3u_count * sizeof(*archive.infos));
-            if (!archive.infos)
-            {
-                error_loop("m3u realloc failed\n");
-            }
-            archive.infos[archive.m3u_count-1] = m3u_info;
-        }
-        m3u_offset += len + 1;
-    }
-
-    qsort(archive.infos, archive.m3u_count, sizeof(*archive.infos), cmpfunc);
+    // reset gbs header in psram
+    ezflash_reset_psram();
 
     play();
     return true;
@@ -299,6 +369,18 @@ static void load_from_file(const char* rpath)
     if (FR_OK != f_open(&file, rpath, FA_READ)) {
         error_loop(rpath);
     }
+
+    if (EZ_PRELOAD_ROM && ezflash_load_file_into_psram(&file))
+    {
+        if (!load_from_mem())
+        {
+            error_loop("failed to load rom from psram");
+        }
+
+        return;
+    }
+
+    f_rewind(&file);
 
     static struct FileIo EWRAM_BSS fileio;
     memcpy(&fileio.fp, &file, sizeof(fileio.fp));
@@ -343,9 +425,9 @@ static bool scan_dir(const char* rpath)
             e->is_dir = false;
         }
 
-        snprintf(e->name, sizeof(e->name), "%s", info.fname);
-        // strncpy(e->name, info.fname, sizeof(e->name) - 1);
-        // e->name[sizeof(e->name) - 1] = '\0';
+        // strncpy warns, this doesn't.
+        memcpy(e->name, info.fname, sizeof(e->name));
+        e->name[sizeof(e->name) - 1] = '\0';
 
         count++;
         if (count >= FILE_ENTRY_MAX) {
@@ -357,6 +439,7 @@ static bool scan_dir(const char* rpath)
     g_file_index = 0;
     g_file_count = count;
 
+    qsort(g_file_entries, count, sizeof(*g_file_entries), sortfunc);
     return true;
 }
 
