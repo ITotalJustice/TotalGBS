@@ -543,7 +543,7 @@ int main(void)
     if (!load_from_mem())
     {
         // fall back to file, this won't return if it fails.
-        FATFS fs;
+        static FATFS EWRAM_BSS fs;
         if (FR_OK != f_mount(&fs, "", 1))
         {
             error_loop("failed to mount sd card\n");
